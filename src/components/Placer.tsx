@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useGame, MoldId, DecorationId, ToolId } from "../game/store";
 import { CastlePiece, MOLD_SHAPES } from "./CastlePiece";
 import { Decoration, DECORATION_SHAPES } from "./Decoration";
+import { ghostSandMaterial, ghostSandDarkMaterial } from "../game/materials";
 import { ISLAND_RADIUS, sandHeight, withinIsland } from "../game/terrain";
 
 const MOLD_IDS: MoldId[] = [
@@ -35,57 +36,47 @@ export function GhostPreview({ cursor }: Props) {
 
   const kind = classify(tool);
 
-  // Clone shared materials onto the ghost subtree so opacity/emissive tweaks
-  // don't bleed into placed pieces (which share the same sand material cache).
-  useEffect(() => {
-    if (!groupRef.current) return;
-    const owned: THREE.Material[] = [];
-    groupRef.current.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const m = mesh.material;
-      if (Array.isArray(m)) {
-        mesh.material = m.map((mm) => {
-          const c = mm.clone();
-          owned.push(c);
-          return c;
-        });
-      } else if (m) {
-        const c = m.clone();
-        owned.push(c);
-        mesh.material = c;
-      }
-    });
-    return () => {
-      owned.forEach((m) => m.dispose());
-    };
-  }, [tool]);
-
-  // pulse opacity on cloned materials only
+  // The ghost subtree contains only materials that are safe to mutate:
+  //  - castle meshes use ghostSand* singletons (never used by placed pieces)
+  //  - decorations & footprint ring use fresh inline materials (local subtree)
+  // So a single useFrame walk pulses opacity + valid/invalid tint without
+  // leaking into the placed-piece materials.
   useFrame((state) => {
     if (!groupRef.current) return;
-    const t = state.clock.elapsedTime;
-    const target = cursor ? (cursor.valid ? 0.65 : 0.25) + Math.sin(t * 4) * 0.05 : 0;
     groupRef.current.visible = !!cursor && kind !== "erase";
+    if (!cursor) return;
+    const t = state.clock.elapsedTime;
+    const pulse = 0.65 + Math.sin(t * 4) * 0.05;
+    const target = cursor.valid ? pulse : pulse * 0.45;
+    const tint = cursor.valid ? "#3a5a30" : "#702020";
+
+    // Always set the ghost-sand singletons even if the subtree hasn't been
+    // traversed yet this frame.
+    for (const mat of [ghostSandMaterial(), ghostSandDarkMaterial()]) {
+      mat.opacity = target;
+      mat.emissive.set(tint);
+      mat.emissiveIntensity = 0.2;
+    }
+
     groupRef.current.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh) return;
       const m = mesh.material;
+      const apply = (mat: THREE.Material) => {
+        if ("opacity" in mat) {
+          mat.transparent = true;
+          (mat as THREE.MeshStandardMaterial).opacity = target;
+          (mat as THREE.MeshStandardMaterial).depthWrite = false;
+        }
+        const std = mat as THREE.MeshStandardMaterial;
+        if ("emissive" in std && std.emissive) {
+          std.emissive.set(tint);
+          std.emissiveIntensity = 0.2;
+        }
+      };
       if (Array.isArray(m)) m.forEach(apply);
       else if (m) apply(m);
     });
-    function apply(mat: THREE.Material) {
-      if ("opacity" in mat) {
-        mat.transparent = true;
-        (mat as THREE.MeshStandardMaterial).opacity = target;
-        (mat as THREE.MeshStandardMaterial).depthWrite = false;
-      }
-      const std = mat as THREE.MeshStandardMaterial;
-      if ("emissive" in std && std.emissive) {
-        std.emissive.set(cursor?.valid ? "#3a5a30" : "#702020");
-        std.emissiveIntensity = 0.25;
-      }
-    }
   });
 
   if (!cursor || kind === "erase") return null;
@@ -95,7 +86,7 @@ export function GhostPreview({ cursor }: Props) {
   return (
     <group ref={groupRef} position={[cursor.x, y, cursor.z]} rotation={[0, rotation, 0]}>
       {kind === "mold" ? (
-        <CastlePiece variant={tool as MoldId} />
+        <CastlePiece variant={tool as MoldId} ghost />
       ) : (
         <Decoration variant={tool as DecorationId} seed={seedRef.current} />
       )}

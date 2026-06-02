@@ -1,7 +1,13 @@
 import { useMemo } from "react";
 import * as THREE from "three";
 import { MoldId } from "../game/store";
-import { sandMaterial, sandMaterialDark, wetSandMaterial } from "../game/materials";
+import {
+  sandMaterial,
+  sandMaterialDark,
+  wetSandMaterial,
+  ghostSandMaterial,
+  ghostSandDarkMaterial,
+} from "../game/materials";
 
 /** Visual + collider dimensions of a mold variant. */
 export interface MoldShape {
@@ -26,20 +32,30 @@ interface Props {
   variant: MoldId;
   /** how submerged the piece is (0 dry → 1 fully soaked). Visual only. */
   wetness?: number;
+  /** Renders with translucent ghost-specific materials (used by placement preview). */
+  ghost?: boolean;
 }
 
 /**
- * All molds are built procedurally from primitives. They share a sand material
- * so anything you place looks like part of the same castle.
+ * All molds are built procedurally from primitives. Placed pieces use cached
+ * sand materials; the ghost preview uses its own dedicated material instances
+ * (ghostSandMaterial / ghostSandDarkMaterial) so its translucency stays isolated.
  */
-export function CastlePiece({ variant, wetness = 0 }: Props) {
+export function CastlePiece({ variant, wetness = 0, ghost = false }: Props) {
   const sand = sandMaterial();
   const dark = sandMaterialDark();
   const wet = wetSandMaterial();
 
-  // Choose material based on wetness band
-  const baseMat = wetness > 0.5 ? wet : sand;
-  const accentMat = wetness > 0.5 ? wet : dark;
+  const baseMat = ghost
+    ? ghostSandMaterial()
+    : wetness > 0.5
+      ? wet
+      : sand;
+  const accentMat = ghost
+    ? ghostSandDarkMaterial()
+    : wetness > 0.5
+      ? wet
+      : dark;
 
   switch (variant) {
     case "square-tower": return <SquareTower base={baseMat} accent={accentMat} />;
