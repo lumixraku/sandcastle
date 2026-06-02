@@ -90,9 +90,10 @@ export function Ocean({ islandRadius }: Props) {
   const matRef = useRef<THREE.ShaderMaterial>(null);
 
   const geometry = useMemo(() => {
-    // dense plane around the island, fog fades it out into the distance
-    const g = new THREE.PlaneGeometry(140, 140, 280, 280);
-    return g;
+    // Circular disc, far larger than the fog distance — no square corners
+    // ever poke through the horizon. Radial spacing is non-linear: dense
+    // near the island where waves matter, sparse far out (which is fogged).
+    return makeOceanDisc(200, 110, 160);
   }, []);
 
   const material = useMemo(
@@ -138,4 +139,71 @@ export function Ocean({ islandRadius }: Props) {
       <primitive object={material} ref={matRef} attach="material" />
     </mesh>
   );
+}
+
+/**
+ * Disc geometry on the XY plane (z = 0) sized to {radius}. Rings get most of
+ * their density inside {denseRadius}; beyond that the spacing widens to save
+ * vertices in the fogged-out region. Uses the same xy → wave-displacement
+ * convention as the ocean shader.
+ */
+function makeOceanDisc(radius: number, denseRadius: number, angularSegments: number) {
+  const innerRings = 70;
+  const outerRings = 24;
+
+  const positions: number[] = [0, 0, 0];
+  const uvs: number[] = [0.5, 0.5];
+
+  function pushRing(r: number) {
+    for (let a = 0; a < angularSegments; a++) {
+      const theta = (a / angularSegments) * Math.PI * 2;
+      const x = Math.cos(theta) * r;
+      const y = Math.sin(theta) * r;
+      positions.push(x, y, 0);
+      uvs.push(0.5 + x / (2 * radius), 0.5 + y / (2 * radius));
+    }
+  }
+
+  // Inner band: linear radial spacing for clean waves near the island.
+  for (let i = 1; i <= innerRings; i++) {
+    pushRing((i / innerRings) * denseRadius);
+  }
+  // Outer band: expanding spacing into the fog.
+  for (let i = 1; i <= outerRings; i++) {
+    const t = i / outerRings;
+    const r = denseRadius + (radius - denseRadius) * (t * t);
+    pushRing(r);
+  }
+
+  const totalRings = innerRings + outerRings;
+  const indices: number[] = [];
+  // Center fan
+  for (let a = 0; a < angularSegments; a++) {
+    const next = (a + 1) % angularSegments;
+    indices.push(0, 1 + a, 1 + next);
+  }
+  // Concentric ring strips
+  for (let r = 0; r < totalRings - 1; r++) {
+    const baseA = 1 + r * angularSegments;
+    const baseB = 1 + (r + 1) * angularSegments;
+    for (let a = 0; a < angularSegments; a++) {
+      const next = (a + 1) % angularSegments;
+      const i0 = baseA + a;
+      const i1 = baseA + next;
+      const i2 = baseB + a;
+      const i3 = baseB + next;
+      indices.push(i0, i2, i1);
+      indices.push(i1, i2, i3);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3)
+  );
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  g.setIndex(indices);
+  g.computeVertexNormals();
+  return g;
 }
